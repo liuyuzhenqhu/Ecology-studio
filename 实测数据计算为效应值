@@ -1,0 +1,128 @@
+# 加载需要的R包
+library(tidyverse)
+library(metafor)
+
+# 读取原始数据
+raw_data <- read.csv(file.choose(), header = TRUE)  # 如果数据有表头，请设置header = TRUE，否则设置为header = FALSE
+
+# 计算均值和标准差
+summary_data <- raw_data %>%
+  filter(TR != "CK") %>%  # 过滤掉对照CK的数据
+  group_by(TR) %>%
+  summarize(
+    TMean = mean(Biomass),
+    TSD = sd(Biomass),
+    TN = n(),  # 计算每个处理的观测次数
+    CMean = mean(raw_data$Biomass[raw_data$TR == "CK"]),  # 计算对照CK的均值
+    CSD = sd(raw_data$Biomass[raw_data$TR == "CK"]),  # 计算对照CK的标准差
+    CN = n()  # 对照CK的重复数为总观测次数
+  )
+
+# 整理后的数据框
+print(summary_data)
+
+# 将整理后的数据赋值给d1
+d1 <- summary_data
+
+# 先计算yi和vi
+d2 <- escalc(measure = "ROM", data = d1, m1i = TMean, sd1i = TSD, n1i = TN, m2i = CMean, sd2i = CSD, n2i = CN)
+d2
+
+# 计算整体的效应值
+r1 <- rma(yi, vi, data = d2, method = "REML")
+summary(r1)
+
+# 将整体效应值赋值给kk1，后边整理森林图绘图的时候需要
+kk1 <- summary(r1)
+
+# 计算亚组的效应值
+subgroups <- unique(d2$TR)  # 获取所有不重复的处理名称
+subgroup_results <- list()  # 存储亚组效应值的列表
+
+for (subgroup in subgroups) {
+  subgroup_data <- subset(d2, TR == subgroup)  # 选择当前亚组的数据
+  subgroup_result <- rma(yi, vi, data = subgroup_data, method = "REML")  # 计算当前亚组的效应值
+  subgroup_results[[subgroup]] <- subgroup_result  # 存储当前亚组的效应值
+}
+
+# 查看亚组的效应值
+for (subgroup in subgroups) {
+  print(subgroup_results[[subgroup]])
+}
+
+# 开始组合
+# 首先是累积效应的组合
+combined_data1 <- data.frame(
+  estimate = kk1$b,
+  se = kk1$se,
+  pval = kk1$pval
+)
+
+#==========================================亚组的组合
+combined_subgroup_data <- list()
+
+for (subgroup in subgroups) {
+  subgroup_result <- subgroup_results[[subgroup]]
+  combined_subgroup_data[[subgroup]] <- data.frame(
+    estimate = subgroup_result$b,
+    se = subgroup_result$se,
+    pval = subgroup_result$pval
+  )
+}
+
+# 合并亚组的数据
+combined_data_subgroup <- do.call(rbind, combined_subgroup_data)
+
+# 添加亚组名称作为新的一列
+combined_data_subgroup$Subgroup <- rownames(combined_data_subgroup)
+
+# 打印结果
+print(combined_data_subgroup)
+
+# 添加显著性标识
+# 添加新列sig
+data_df <- combined_data_subgroup
+
+data_df$sig <- ""
+
+# 根据pval填写sig列
+for (i in 1:nrow(data_df)) {
+  if (data_df$pval[i] < 0.001) {
+    data_df$sig[i] <- "***"
+  } else if (data_df$pval[i] < 0.01) {
+    data_df$sig[i] <- "**"
+  } else if (data_df$pval[i] < 0.05) {
+    data_df$sig[i] <- "*"
+  }
+}
+
+# 打印结果
+print(data_df)
+
+#绘制森林图
+#调用R包
+library(ggthemes)
+library(ggplot2)
+#读取数据
+dataset <- as.data.frame(data_df)
+dataset$index <- rownames(dataset)
+dataset
+#森林图绘制
+a<-ggplot(dataset, aes(estimate, index))+
+  geom_point(aes(color = index),size=4)+
+  scale_colour_manual(values = c("#00A087FF","#4DBBD5FF","#E64B35FF", "#91D1C2FF", "#8491B4FF", "#F39B7FFF"))+
+  geom_errorbarh(aes(xmax = estimate +`se`, xmin = estimate -`se`,color = index),size= 0.5,height = 0.2) +
+  scale_x_continuous(limits= c(-2.5, 2.5))+
+  geom_vline(aes(xintercept = 0),color="gray",linetype="dashed", size = 0.6) +
+  xlab('效应量 Effect size ')+ 
+  ylab(' ')+
+  theme_few()+
+  theme(axis.text.x = element_text(size = 24, color = "black"))+
+  theme(axis.text.y = element_text(size = 24, color = "black"))+
+  theme(title=element_text(size=24))+
+  theme_bw()+
+  theme(axis.ticks.length=unit(-0.25, "cm"), 
+        axis.text.x = element_text(margin=unit(c(0.5,0.5,0.5,0.5), "cm")), 
+        axis.text.y = element_text(margin=unit(c(0.5,0.5,0.5,0.5), "cm")) )
+#查看图a
+a
